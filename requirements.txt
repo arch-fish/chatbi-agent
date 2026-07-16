@@ -1,0 +1,8 @@
+openai>=1.0
+pandas
+openpyxl
+langgraph
+langchain-openai
+langchain-core
+streamlit
+langgraph-checkpoint-sqlite

@@ -1,0 +1,13 @@
+# 密钥
+.env
+# 真实数据（subject_id 含病人拼音名，PII！）
+data.db
+data.db-journal
+*.sqlite
+chat_memory.sqlite
+eval_cases.json
+../excel/
+uploads/
+# 缓存
+__pycache__/
+*.pyc
