@@ -8,6 +8,9 @@ chat_memory.sqlite
 eval_cases.json
 ../excel/
 uploads/
-# 缓存
+# 运行产物
+traces.jsonl
+# IDE / 缓存
+.idea/
 __pycache__/
 *.pyc

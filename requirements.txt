@@ -6,3 +6,6 @@ langchain-openai
 langchain-core
 streamlit
 langgraph-checkpoint-sqlite
+
+# 可选：启用向量/混合检索
+sentence-transformers

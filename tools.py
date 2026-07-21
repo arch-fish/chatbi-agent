@@ -4,6 +4,7 @@ import json
 import pandas as pd
 from db import run_sql, get_conn
 import config
+from glossary import GLOSSARY
 
 # ---------- 工具1：查数据库 ----------
 def query_db(sql: str) -> str:
@@ -12,7 +13,20 @@ def query_db(sql: str) -> str:
     try:
         cols, rows = run_sql(config.DB_PATH, sql)
     except Exception as e:
-        return f"SQL执行出错：{e}。请修正后重试。"
+        msg = str(e); low = msg.lower()
+        if "no such column" in low:
+            hint = "字段不存在。请先用 lookup_columns 查到准确字段名，再重写 SQL。"
+        elif "no such table" in low:
+            hint = "表不存在。可用表：subjects、brain_features、semantic_dict。"
+        elif "syntax error" in low or "near " in low:
+            hint = "SQL 语法错误，请修正语法后重试。"
+        elif "incomplete input" in low:
+            hint = "SQL 不完整（可能过长被截断），请精简后重试。"
+        elif "readonly" in low or "attempt to write" in low:
+            hint = "数据库只读，不能写/改，请改用 SELECT。"
+        else:
+            hint = "请检查后重试。"
+        return f"SQL执行出错：{msg}。{hint}"
     if not rows:
         return "查询成功，但没有结果行。"
     out = [" | ".join(map(str, cols))]
@@ -24,19 +38,10 @@ def query_db(sql: str) -> str:
 
 # ---------- 工具2：查语义字典(拿准确列名) ----------
 def lookup_columns(keyword: str) -> str:
-    """按关键词在语义字典里找匹配的字段。用【二元词切分】模糊匹配：关键词切成相邻2字片段
-    (皮层厚度->皮层/层厚/厚度)，任一命中即返回，解决“用户词与字段词对不齐”的语义鸿沟。"""
-    con = get_conn(config.DB_PATH); cur = con.cursor()
-    kw = keyword.strip()
-    grams = {kw} | ({kw[i:i+2] for i in range(len(kw)-1)} if len(kw) >= 2 else set())
-    conds, params = [], []
-    for g in grams:
-        conds.append("(chinese_term LIKE ? OR field_name LIKE ?)")
-        params += [f"%{g}%", f"%{g}%"]
-    rows = cur.execute(
-        f"SELECT field_name, chinese_term, unit FROM semantic_dict WHERE {' OR '.join(conds)} LIMIT 25",
-        params).fetchall()
-    con.close()
+    """按关键词查找准确字段名。混合检索(向量语义 + 关键词字面，见 retriever.py)：
+    向量补'脑积水↔侧脑室'这类跨字面的语义鸿沟，关键词保字面精确；未装向量模型则降级纯关键词。"""
+    import retriever
+    rows = retriever.hybrid_search(keyword)
     if not rows:
         return f"没找到和“{keyword}”匹配的字段。"
     return "\n".join(f"{f} = {t}{'('+u+')' if u else ''}" for f, t, u in rows)
@@ -79,6 +84,27 @@ def ask_user(question: str) -> str:
         ans = "(用户未回答)"
     return ans or "(用户未回答)"
 
+
+# ---------- 工具5：口径答疑(查定义，不是查数值) ----------
+def explain_metric(term: str) -> str:
+    """回答'这个指标怎么算的/什么定义/含不含X/左右哪个'这类查口径的问题。
+    在口径词典里按语义(二元词模糊)匹配概念，返回单位、口径说明、相关字段。
+    与 query_db 分工：问'是多少'走 query_db；问'怎么定义/怎么算'走这里。"""
+    kw=term.strip()
+    grams={kw}|({kw[i:i+2] for i in range(len(kw)-1)} if len(kw)>=2 else set())
+    hits=[]
+    for c in GLOSSARY:
+        names=" ".join([c["term"]]+c.get("aliases",[]))
+        if any(g in names for g in grams):
+            hits.append(c)
+    if not hits:
+        return f"口径词典暂无'{term}'。可用 lookup_columns 查字段名，或直接查数据。"
+    out=[]
+    for c in hits[:3]:
+        cols="、".join(c["columns"]) if c["columns"] else "-"
+        out.append(f"【{c['term']}】单位:{c['unit'] or '-'}\n口径:{c['口径']}\n相关字段:{cols}")
+    return "\n\n".join(out)
+
 # ---------- 给模型看的“工具说明书”(JSON schema) ----------
 TOOLS_SPEC = [
     {"type": "function", "function": {
@@ -107,10 +133,17 @@ TOOLS_SPEC = [
         "parameters": {"type": "object", "properties": {
             "question": {"type": "string", "description": "要问用户的澄清问题"}},
             "required": ["question"]}}},
+    {"type": "function", "function": {
+        "name": "explain_metric",
+        "description": "回答'这个指标怎么算的/什么定义/含不含X/左右还是平均/缺失怎么处理'这类查【口径定义】的问题(不是查数值)。例如\"皮层厚度是左右平均还是单侧\"\"侧脑室体积怎么算\"\"孕龄缺失算不算\"。参数为用户问的指标词。",
+        "parameters": {"type": "object", "properties": {
+            "term": {"type": "string", "description": "要问口径的指标词，如 皮层厚度、侧脑室体积、孕龄"}},
+            "required": ["term"]}}},
 ]
 
 REGISTRY = {"query_db": query_db, "lookup_columns": lookup_columns,
-            "compute_correlation": compute_correlation, "ask_user": ask_user}
+            "compute_correlation": compute_correlation, "ask_user": ask_user,
+            "explain_metric": explain_metric}
 
 def run_tool(name, args_json):
     """根据模型给的工具名和参数(JSON字符串)，执行对应函数。"""
