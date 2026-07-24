@@ -46,12 +46,14 @@ def ask(question, verbose=True):
                                           temperature=0, max_tokens=1000)  # 400->1000，避免复杂SQL被截断
     raw = resp.choices[0].message.content
     sql = _extract_sql(raw)
+    _u = getattr(resp, 'usage', None)
+    _tok = {'in_tokens': getattr(_u,'prompt_tokens',0) or 0, 'out_tokens': getattr(_u,'completion_tokens',0) or 0, 'llm_calls': 1}
 
     # SQL 为空 = 模型没给有效SQL(如遇歧义摆烂)。显式报出，并附原始回复便于诊断
     if not sql:
         if verbose:
             print("── 模型未生成有效SQL，原始回复 ──\n" + (raw or "(空)"))
-        return {"question": question, "sql": "", "error": "模型未生成有效SQL", "raw": raw, "rows": None}
+        return {"question": question, "sql": "", "error": "模型未生成有效SQL", "raw": raw, "rows": None, **_tok}
 
     if verbose:
         print("── LLM 生成的 SQL ──\n" + sql)
@@ -60,11 +62,11 @@ def ask(question, verbose=True):
     except Exception as e:
         if verbose:
             print("── 执行出错 ──\n" + str(e))
-        return {"question": question, "sql": sql, "error": str(e), "rows": None}
+        return {"question": question, "sql": sql, "error": str(e), "rows": None, **_tok}
     if verbose:
         print("── 结果 ──"); print(cols)
         for r in rows[:20]:
             print(r)
         if len(rows) > 20:
             print(f"...(共 {len(rows)} 行)")
-    return {"question": question, "sql": sql, "cols": cols, "rows": rows}
+    return {"question": question, "sql": sql, "cols": cols, "rows": rows, **_tok}
